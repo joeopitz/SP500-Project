@@ -1,0 +1,162 @@
+---
+title: "Final Project"
+author: "Joe Opitz & Quinn Springer"
+date: "2025-04-23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+dfr <- read.csv("C:\\Users\\jopitz\\OneDrive - Montana Tech\\STAT 491 - Intro to Data Science\\Stock-Market\\S&P.csv", header = TRUE)
+install.packages("dplyr");library(dplyr)
+install.packages("ggplot2"); library(ggplot2)
+library(rpart)
+install.packages("rpart.plot");library(rpart.plot)
+```
+
+## We will start by preparing our S&P 500 data
+
+```{r}
+# View the first 5 rows of the data
+head(dfr, 5)
+```
+
+We will mostly be using Adj.Close, or features created based off of Adj.Close.
+
+```{r}
+# Add index field
+n <- dim(dfr)[1]
+dfr$index <- c(1:n)
+
+# Check for null values
+sum(is.na(dfr))
+```
+No missing values.
+
+### Outlier detection
+```{r}
+# Calculate percentage returns for consistency
+dfr$Returns <- c(0,diff(log(dfr$Adj.Close)))
+
+# Compute outlier threshold
+mu.return <- mean(dfr$Returns)
+sd.return <- sd(dfr$Returns)
+outlier_threshold.pos <- mu.return + 3 *sd.return
+outlier_threshold.neg <- mu.return - 3 *sd.return
+
+# Detect outliers
+SP_outliers <- dfr[which(dfr$Returns < outlier_threshold.neg |
+                           dfr$Returns > outlier_threshold.pos),]
+
+SP_outliers
+```
+
+#### We have a few outliers, so we will flag them for the models to see
+
+```{r}
+# Flag outliers
+dfr$Outliers <- ifelse(dfr$Returns < outlier_threshold.neg |
+                           dfr$Returns > outlier_threshold.pos, 1, 0)
+```
+
+```{r}
+# Create lag-based log returns
+for (k in 0:5) {
+  dfr[[paste0("Lag_", k)]] <- dplyr::lag(dfr$Returns, k)
+}
+```
+
+
+```{r}
+head(dfr)
+```
+
+```{r}
+# We will now have to remove Lag_0 as it is the same as Adj.Close
+dfr$Lag_0 <- NULL
+```
+
+## We will now begin our EDA step
+
+```{r}
+# Change date to time-series data
+dfr$Date <- as.Date(dfr$Date)
+
+# Create plot
+ggplot(dfr, aes(x = Date, y = Adj.Close)) +
+  geom_line() +
+  labs(title = "S&P 500 Over Time", x = "Date", y = "Adjusted Close") +
+  theme_minimal()
+```
+
+
+```{r}
+# Bin return values to visualize amount of increasing/decreasing days
+dfr$Returns.binned <- cut(dfr$Returns, breaks = c(-1, 0, 1), labels = c("Decreasing", "Increasing"))
+
+# Create plots to demonstrate amount of days increasing versus decreasing
+ggplot(dfr, aes(Returns.binned)) + geom_bar()
+```
+
+We can see that there is about as many days where the price increases versus decreases, with slightly more increasing days
+
+```{r}
+# Create histogram of daily returns
+ggplot(dfr, aes(Returns)) + geom_histogram(color = "black")
+```
+
+Seems to be fairly normally distributed with a couple of outliers, that we have already detected in a previous step 
+
+## Create train/test split on data
+```{r}
+set.seed(406)
+
+# Prepare for partition
+n <- dim(dfr)[1]
+train_ind <- runif(n) < 0.75
+
+# Create train test split
+df_train <- dfr[train_ind,]
+df_test <- dfr[!train_ind,]
+```
+
+# Come back to and validate
+
+
+## We will start off with a Multiple Linear Regression model
+```{r}
+# Create model
+lm <- lm(Returns ~ Lag_1, data = df_train)
+
+# View summary
+summary(lm)
+```
+
+Based on these results, we are able to tell that the model is not doing very well. Which is too be expected for a project like this we will need to have much more powerful models than a simple linear regression model.
+
+### Create a Multiple linear regression model
+```{r}
+# Create model
+lm_multi <- lm(Returns ~ Lag_1 + Lag_2 + Lag_3 + Lag_4 + Lag_5, data = df_train)
+
+# View model summary
+summary(lm_multi)
+```
+
+As stated earlier, any sort of a linear regression model will be extremely difficult to predict the price of a stock. So, there is no surpise that the model is still not performing well. We will be begin to move towards some more advanced models.
+
+## Try a cart model to predict whether or not the model will increase or decrease
+```{r}
+# Change categorical features
+df_train$Returns.binned <- as.factor(df_train$Returns.binned)
+
+CART <- rpart(Returns.binned ~ Lag_1 + Lag_2 + Lag_3  + Lag_4 + Volume, 
+              data = df_train, method = "class")
+
+ypreds <- predict(CART, newdata = df_test, type = "class")
+
+t1 <- table(df_test$Returns.binned, ypreds)
+t1 <- addmargins(t1)
+t1
+```
+
