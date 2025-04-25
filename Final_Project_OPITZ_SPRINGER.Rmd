@@ -8,10 +8,16 @@ output: pdf_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 dfr <- read.csv("C:\\Users\\jopitz\\OneDrive - Montana Tech\\STAT 491 - Intro to Data Science\\Stock-Market\\S&P.csv", header = TRUE)
-install.packages("dplyr");library(dplyr)
-install.packages("ggplot2"); library(ggplot2)
+library(dplyr)
+library(ggplot2)
 library(rpart)
-install.packages("rpart.plot");library(rpart.plot)
+library(rpart.plot)
+library(C50)
+library(TTR)
+library(randomForest)
+library(xgboost)
+library(e1071)
+library(nnet)
 ```
 
 ## We will start by preparing our S&P 500 data
@@ -59,11 +65,19 @@ dfr$Outliers <- ifelse(dfr$Returns < outlier_threshold.neg |
                            dfr$Returns > outlier_threshold.pos, 1, 0)
 ```
 
+### Feature engineering
+
 ```{r}
 # Create lag-based log returns
 for (k in 0:5) {
   dfr[[paste0("Lag_", k)]] <- dplyr::lag(dfr$Returns, k)
 }
+
+# Calculate moving averages over 5 days
+dfr$SMA_5 <- SMA(dfr$Adj.Close, n = 5)
+
+# Calculate standard dev (volatility) over 5 days
+dfr$Volatility_5 <- runSD(dfr$Returns, n = 5)
 ```
 
 
@@ -74,6 +88,11 @@ head(dfr)
 ```{r}
 # We will now have to remove Lag_0 as it is the same as Adj.Close
 dfr$Lag_0 <- NULL
+
+# Omit na values within training set
+dfr <- na.omit(dfr)
+
+head(dfr)
 ```
 
 ## We will now begin our EDA step
@@ -137,26 +156,99 @@ Based on these results, we are able to tell that the model is not doing very wel
 ### Create a Multiple linear regression model
 ```{r}
 # Create model
-lm_multi <- lm(Returns ~ Lag_1 + Lag_2 + Lag_3 + Lag_4 + Lag_5, data = df_train)
+lm_multi <- lm(Returns ~ Lag_1 + Lag_2 + Lag_3 + Lag_4 + Lag_5 + Volume + SMA_5, data = df_train)
 
 # View model summary
 summary(lm_multi)
 ```
 
-As stated earlier, any sort of a linear regression model will be extremely difficult to predict the price of a stock. So, there is no surpise that the model is still not performing well. We will be begin to move towards some more advanced models.
+
+As stated earlier, any sort of a linear regression model will be extremely difficult to predict the price of a stock. So, there is no surpise that the model is still not performing well. 
+
+```{r}
+predictions_lm <- predict(lm_multi, newdata = df_test)
+
+# RMSE and R²
+rmse_lm <- sqrt(mean((df_test$Returns - predictions_lm)^2))
+sst_lm <- sum((df_test$Returns - mean(df_test$Returns))^2)
+sse_lm <- sum((df_test$Returns - predictions_lm)^2)
+r_squared_lm <- 1 - (sse_lm / sst_lm)
+
+rmse_lm
+r_squared_lm
+```
+
+Results are pretty solid overall, low RMSE, which shows that the model is doing well overall. We would like the R^2 to be higher, so will continue to test out new models.
 
 ## Try a cart model to predict whether or not the model will increase or decrease
 ```{r}
 # Change categorical features
 df_train$Returns.binned <- as.factor(df_train$Returns.binned)
 
-CART <- rpart(Returns.binned ~ Lag_1 + Lag_2 + Lag_3  + Lag_4 + Volume, 
-              data = df_train, method = "class")
-
-ypreds <- predict(CART, newdata = df_test, type = "class")
-
-t1 <- table(df_test$Returns.binned, ypreds)
-t1 <- addmargins(t1)
-t1
+CART <- rpart(Returns ~ Lag_1 + Lag_2 + Lag_3  + Lag_4 + Lag_5 + Volume + SMA_5, 
+              data = df_train, method = "anova")
 ```
+
+```{r}
+ypreds_cart <- predict(CART, newdata = df_test)
+
+# Root Mean Squared Error
+rmse <- sqrt(mean((df_test$Returns - ypreds_cart)^2))
+
+# R-squared
+sst <- sum((df_test$Returns - mean(df_test$Returns))^2)
+sse <- sum((df_test$Returns - ypreds_cart)^2)
+r_squared <- 1 - (sse / sst)
+
+rmse
+r_squared
+```
+
+The negative variance is worrying, but the RMSE shows that the model does fairly well at generalizing the model. Just seems as though the CART algorithm is not great for this specific problem. Will move onto Random Forest Regressor
+
+```{r}
+
+```
+
+```{r}
+rf_model <- randomForest(Returns ~ Lag_1 + Lag_2 + Lag_3 + Lag_4 + Lag_5  + SMA_5,
+                         data = df_train,
+                         ntree = 500,
+                         mtry = 3,
+                         importance = TRUE)
+
+preds_rf <- predict(rf_model, newdata = df_test)
+
+# RMSE
+rmse_rf <- sqrt(mean((df_test$Returns - preds_rf)^2))
+
+# R²
+sst <- sum((df_test$Returns - mean(df_test$Returns))^2)
+sse <- sum((df_test$Returns - preds_rf)^2)
+r_squared_rf <- 1 - (sse / sst)
+
+rmse_rf
+r_squared_rf
+```
+
+Random Forest sucks just a little less than our CART model. We will now be moving on to a XGBoost.
+
+```{r}
+svr_model <- svm(Returns ~ Lag_1 + Lag_2 + Lag_3 + Lag_4 + Lag_5 + Volume + SMA_5,
+                 data = df_train, type = "eps-regression")
+
+preds_svr <- predict(rf_model, newdata = df_test)
+
+# RMSE
+rmse_svr <- sqrt(mean((df_test$Returns - preds_svr)^2))
+
+# R²
+sst <- sum((df_test$Returns - mean(df_test$Returns))^2)
+sse <- sum((df_test$Returns - preds_svr)^2)
+r_squared_svr <- 1 - (sse / sst)
+
+rmse_svr
+r_squared_svr
+```
+
 
